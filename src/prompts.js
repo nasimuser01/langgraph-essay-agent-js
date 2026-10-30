@@ -9,6 +9,8 @@ You are an essay assistant tasked with writing excellent 5-paragraph essays.
 
 Generate the best essay possible for the user's request and the initial outline.
 If critique is provided, respond with a revised version of your previous attempt.
+Write in Markdown. When you use a fact from the research below, cite it inline
+as [title](url).
 
 Use the research content below as needed:
 

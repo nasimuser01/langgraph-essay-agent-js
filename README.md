@@ -1,430 +1,144 @@
-# LangGraph Essay Writer Agent — Node.js
+# LangGraph Essay Writer Agent — Node.js, with a live steps UI
 
-A beginner-friendly **LangGraph.js** project that builds an AI essay writer agent using **Node.js**, **JavaScript**, **Gemini**, and **Tavily Search**.
-
-The agent creates an essay through a multi-step workflow:
+A **LangGraph.js** essay-writing agent with an **Express** server that streams every
+step of the run as Server-Sent Events, and a small **React** screen that shows the
+agent planning, researching, drafting, reviewing itself and revising, live.
 
 ```text
 planner → research_plan → generate → reflect → research_critique → generate → END
 ```
 
----
-
 ## What this project does
 
-This agent:
+1. Receives an essay topic.
+2. Writes a high-level outline (planner).
+3. Generates search queries with structured output and searches the web (research_plan).
+4. Streams a first draft token by token (generate).
+5. Critiques the draft (reflect).
+6. Searches again based on the critique (research_critique).
+7. Streams a revised draft (generate) and stops at the revision cap.
 
-1. Receives an essay topic from the user.
-2. Creates a high-level essay plan.
-3. Generates research queries.
-4. Searches the web using Tavily.
-5. Writes a first draft.
-6. Critiques the draft.
-7. Searches again based on the critique.
-8. Generates an improved final draft.
-9. Stops when the maximum revision count is reached.
-
----
+Every node reports progress through LangGraph's custom stream writer, so the CLI,
+the server and the UI all see the same events.
 
 ## Tech stack
 
-- **Node.js**
-- **JavaScript ES Modules**
-- **LangGraph.js**
-- **LangChain.js**
-- **Gemini API**
-- **Tavily Search API**
-- **dotenv**
-- **zod**
-
----
+- Node.js 20+, ES modules
+- LangGraph.js, LangChain.js, zod
+- LLM: **Groq** (free tier) or **Gemini**
+- Search: **Tavily** (free tier) or the **Wikipedia API** (no key needed)
+- Express 5 for the SSE API
+- React 18 + Vite for the UI
 
 ## Project structure
 
 ```text
-langgraph-essay-agent-js/
-  .env
-  .gitignore
-  package.json
-  src/
-    index.js
-    graph.js
-    prompts.js
+src/
+  graph.js      the graph: state, nodes, edges, progress events
+  search.js     Tavily or Wikipedia search
+  prompts.js    system prompts
+  server.js     Express server: GET /api/run?topic=...  → text/event-stream
+  index.js      command-line runner
+web/            React app (Vite)
+.env.example    all settings
 ```
 
----
-
-## Requirements
-
-Install these before running the project:
-
-- Node.js 20 or later
-- npm
-- A Gemini API key
-- A Tavily API key
-
-Check Node and npm:
-
-```bash
-node -v
-npm -v
-```
-
----
-
-## Installation
-
-Clone or create the project folder, then install dependencies:
+## Setup
 
 ```bash
 npm install
+npm run web:install
+cp .env.example .env   # then fill in a key
 ```
 
-Required packages:
+Keys, pick one LLM and optionally Tavily:
 
-```bash
-npm install @langchain/langgraph @langchain/core @langchain/google-genai @tavily/core dotenv zod
-```
+| Variable         | Purpose                                                       |
+|------------------|---------------------------------------------------------------|
+| `GROQ_API_KEY`   | Free at console.groq.com. When set, Groq is used.             |
+| `GROQ_MODEL`     | Default `openai/gpt-oss-120b`. Also `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`. |
+| `GOOGLE_API_KEY` | Gemini, used when no Groq key is set.                         |
+| `LLM_PROVIDER`   | Force `groq` or `gemini`.                                     |
+| `TAVILY_API_KEY` | Optional but recommended (free tier). Without it, Wikipedia search is used. |
 
----
+## Run
 
-## Environment variables
-
-Create a `.env` file in the project root:
-
-```env
-GOOGLE_API_KEY=your_gemini_api_key_here
-TAVILY_API_KEY=your_tavily_api_key_here
-```
-
-Do not commit `.env` to GitHub.
-
-Your `.gitignore` should include:
-
-```gitignore
-node_modules
-.env
-```
-
----
-
-## Run the agent
-
-Start the project:
-
-```bash
-npm start
-```
-
-Or run with a custom topic:
+Command line:
 
 ```bash
 npm start -- "How can AI agents improve accessibility testing?"
 ```
 
----
+Server and UI, two terminals:
 
-## Example output
-
-When the agent runs successfully, you should see logs like:
-
-```text
-Starting Essay Writer Agent...
-
---- PLANNER NODE ---
---- RESEARCH PLAN NODE ---
-Searching: ...
---- GENERATE NODE ---
---- SHOULD CONTINUE? ---
---- REFLECTION NODE ---
---- RESEARCH CRITIQUE NODE ---
-Searching: ...
---- GENERATE NODE ---
-
-FINAL ESSAY
-...
+```bash
+npm run server          # http://localhost:3000
+npm run web:dev         # http://localhost:5173, proxies /api to the server
 ```
 
----
+Single process for a demo:
 
-## Main graph flow
-
-```text
-START
-  ↓
-planner
-  ↓
-research_plan
-  ↓
-generate
-  ↓
-should_continue?
-  ├── END
-  └── reflect
-        ↓
-    research_critique
-        ↓
-      generate
+```bash
+npm run web:build
+npm run server          # serves the built UI at http://localhost:3000
 ```
 
----
+Raw event stream:
+
+```bash
+curl -N "http://localhost:3000/api/run?topic=LangGraph"
+```
+
+## Events
+
+| Event      | Data                                      | Meaning                        |
+|------------|-------------------------------------------|--------------------------------|
+| `step`     | `{ step, status, revision? }`             | a node started or finished     |
+| `plan`     | `{ text }`                                | the outline                    |
+| `queries`  | `{ step, queries }`                       | search queries for a node      |
+| `search`   | `{ step, question, status, results?, error? }` | one query started or finished |
+| `token`    | `{ step, text }`                          | a chunk of the essay           |
+| `draft`    | `{ revision, text }`                      | a finished draft               |
+| `critique` | `{ text }`                                | the reviewer's feedback        |
+| `waiting`  | `{ step, seconds, attempt }`              | rate limited, retrying         |
+| `done`     | `{ draft, plan, critique, revisions }`    | final state                    |
+| `error`    | `{ message }`                             | the run failed                 |
+
+## How the streaming works
+
+`graph.stream(input, { streamMode: ["custom", "updates"] })` yields pairs of
+mode and chunk. Custom chunks are whatever the nodes pass to `config.writer`.
+Update chunks mark a node as finished. The server maps each to a named SSE
+event. The React app opens an `EventSource` and appends a card to the timeline
+for every `step … running` event, then patches that card as its events arrive.
+The generate node calls `model.stream()` so tokens flow while the essay is written.
+
+## Rate limits
+
+Groq's free tier allows about 8,000 tokens per minute. One essay loop needs more
+than that, so the graph catches 429 responses, waits the time Groq asks for, emits
+a `waiting` event the UI shows, and retries. Reasoning effort is set to low to keep
+token use down. A failed search is reported in the UI but does not stop the run.
 
 ## State fields
 
-The graph state contains:
-
-| Field | Purpose |
-|---|---|
-| `task` | The essay topic |
-| `plan` | The essay outline |
-| `draft` | The current essay draft |
-| `critique` | Feedback on the draft |
-| `content` | Research content from Tavily |
-| `revisionNumber` | Current revision count |
-| `maxRevisions` | Maximum allowed revisions |
-
----
-
-## Main nodes
-
-### `planner`
-
-Creates the essay outline.
-
-Input:
-
-```text
-task
-```
-
-Output:
-
-```text
-plan
-```
-
----
-
-### `research_plan`
-
-Creates research queries from the task and searches Tavily.
-
-Input:
-
-```text
-task
-```
-
-Output:
-
-```text
-content
-```
-
----
-
-### `generate`
-
-Writes the essay using the task, plan, content, and critique.
-
-Input:
-
-```text
-task, plan, content, critique
-```
-
-Output:
-
-```text
-draft, revisionNumber
-```
-
----
-
-### `reflect`
-
-Reviews the draft and creates critique.
-
-Input:
-
-```text
-draft
-```
-
-Output:
-
-```text
-critique
-```
-
----
-
-### `research_critique`
-
-Creates new search queries based on the critique and appends more research content.
-
-Input:
-
-```text
-critique
-```
-
-Output:
-
-```text
-content
-```
-
----
-
-## Useful configuration
-
-In `src/index.js`, you can control how many revision loops the agent runs:
-
-```js
-const input = {
-  task:
-    process.argv.slice(2).join(" ") ||
-    "What is the difference between LangChain and LangSmith?",
-  maxRevisions: 1,
-  revisionNumber: 1,
-};
-```
-
-For learning, keep:
-
-```js
-maxRevisions: 1
-```
-
-This reduces API usage.
-
----
-
-## Gemini model
-
-The project uses Gemini through LangChain:
-
-```js
-const model = new ChatGoogleGenerativeAI({
-  model: "gemini-2.5-flash-lite",
-  temperature: 0,
-});
-```
-
-If you receive a quota error, try another available Gemini model or check your Google AI Studio quota.
-
----
-
-## Common errors
-
-### 1. `Cannot use import statement outside a module`
-
-Fix:
-
-Add this to `package.json`:
-
-```json
-"type": "module"
-```
-
----
-
-### 2. Gemini quota error / 429
-
-Example:
-
-```text
-429 Too Many Requests
-Quota exceeded
-```
-
-Fix options:
-
-- Use `gemini-2.5-flash-lite`
-- Reduce `maxRevisions`
-- Wait and retry later
-- Check your Google AI Studio quota
-
----
-
-### 3. Missing API key
-
-Check your `.env` file:
-
-```env
-GOOGLE_API_KEY=...
-TAVILY_API_KEY=...
-```
-
-Also make sure `src/index.js` imports dotenv:
-
-```js
-import "dotenv/config";
-```
-
----
-
-### 4. Tavily search error
-
-Check:
-
-- `TAVILY_API_KEY` is correct
-- Tavily account has available usage
-- Internet connection is working
-
----
+| Field            | Purpose                                      |
+|------------------|----------------------------------------------|
+| `task`           | the essay topic                              |
+| `plan`           | the outline                                  |
+| `draft`          | the current draft                            |
+| `critique`       | feedback on the draft                        |
+| `content`        | research results `{ title, url, snippet }`, appended across revisions |
+| `revisionNumber` | current revision                             |
+| `maxRevisions`   | revision cap, default 2 (`?maxRevisions=` on the API) |
 
 ## Learning notes
 
-This project teaches the core LangGraph concepts:
-
-| Concept | Meaning |
-|---|---|
-| State | Shared memory/data of the graph |
-| Node | One step in the workflow |
-| Edge | Path from one node to another |
-| Conditional edge | Decision point |
-| Checkpointer | Saves graph progress |
-| Streaming | Shows updates while the graph runs |
-
----
-
-## Next improvement ideas
-
-After the basic essay agent works, you can extend it by:
-
-- Adding an Express API
-- Adding a React frontend
-- Saving results to a file
-- Adding human approval before final output
-- Adding better error handling
-- Turning the workflow into an accessibility analysis agent
-
-Example accessibility version:
-
-```text
-planner → inspect_component → run_a11y_tests → generate_fix → reflect → test_again → END
-```
-
----
-
-## Git setup
-
-Recommended first commit:
-
-```bash
-git init
-git add .
-git commit -m "Create first working LangGraph essay agent"
-```
-
----
-
-## Status
-
-✅ First working LangGraph.js essay agent  
-✅ Node.js backend  
-✅ Gemini model connected  
-✅ Tavily search connected  
-✅ Multi-step graph workflow running  
+| Concept          | Where                                            |
+|------------------|--------------------------------------------------|
+| State + reducers | `Annotation.Root` in `src/graph.js`              |
+| Structured output| `withStructuredOutput(QueriesSchema)`            |
+| Conditional edge | `shouldContinue`                                 |
+| Checkpointer     | `MemorySaver`, one thread id per request         |
+| Custom streaming | `config.writer` in nodes, `streamMode: "custom"` |
+| Token streaming  | `model.stream()` inside the generate node        |

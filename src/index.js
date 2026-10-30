@@ -1,67 +1,53 @@
+/**
+ * Command-line runner.
+ *
+ *   npm start -- "What is the difference between LangChain and LangSmith?"
+ */
+
 import 'dotenv/config';
 import { createEssayGraph } from './graph.js';
 
 async function main() {
+  const task =
+    process.argv.slice(2).join(' ') ||
+    'What is the difference between LangChain and LangSmith?';
+
   const graph = createEssayGraph();
-
-  const threadConfig = {
-    configurable: {
-      thread_id: 'essay-thread-1',
-    },
+  const config = {
+    configurable: { thread_id: 'essay-cli' },
+    streamMode: ['custom'],
   };
 
-  const input = {
-    task: 'What is the difference between LangChain and LangSmith?',
-    maxRevisions: 2,
-    revisionNumber: 1,
-  };
+  console.log(`\nTopic: ${task}\n`);
 
-  console.log('\nStarting Essay Writer Agent...\n');
+  const stream = await graph.stream({ task, maxRevisions: 2, revisionNumber: 1 }, config);
 
-  let finalState = null;
-
-  /**
-   * streamMode: "updates" means:
-   * show only what each node updates.
-   */
-  const stream = await graph.stream(input, {
-    ...threadConfig,
-    streamMode: 'updates',
-  });
-
-  for await (const chunk of stream) {
-    console.log('\n==============================');
-    console.log('GRAPH UPDATE');
-    console.log('==============================');
-
-    console.dir(chunk, {
-      depth: null,
-      colors: true,
-    });
+  for await (const [, ev] of stream) {
+    switch (ev.event) {
+      case 'step':
+        console.log(`\n--- ${ev.step.toUpperCase()}${ev.revision ? ` (revision ${ev.revision})` : ''} ---`);
+        break;
+      case 'search':
+        if (ev.status === 'running') console.log(`Searching: ${ev.question}`);
+        else if (ev.error) console.log(`  failed: ${ev.error}`);
+        else console.log(`  ${ev.results.length} results`);
+        break;
+      case 'token':
+        process.stdout.write(ev.text);
+        break;
+      case 'draft':
+        process.stdout.write('\n');
+        break;
+      default:
+        break;
+    }
   }
 
-  /**
-   * Get the final state after the graph completes.
-   */
-  finalState = await graph.getState(threadConfig);
-
-  console.log('\n\n==============================');
+  const final = await graph.getState(config);
+  console.log('\n==============================');
   console.log('FINAL ESSAY');
   console.log('==============================\n');
-
-  console.log(finalState.values.draft);
-
-  console.log('\n\n==============================');
-  console.log('FINAL PLAN');
-  console.log('==============================\n');
-
-  console.log(finalState.values.plan);
-
-  console.log('\n\n==============================');
-  console.log('FINAL CRITIQUE');
-  console.log('==============================\n');
-
-  console.log(finalState.values.critique);
+  console.log(final.values.draft);
 }
 
 main().catch(function (error) {
